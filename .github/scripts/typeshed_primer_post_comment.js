@@ -2,7 +2,7 @@ module.exports = async ({ github, context }) => {
   const fs = require('fs')
   const DIFF_LINE = { ">": true, "<": true }
 
-  let data = fs.readFileSync('errors_diff.txt', { encoding: 'utf8' })
+  let data = fs.readFileSync('stubdefaulter_diff.txt', { encoding: 'utf8' })
   // Only keep diff lines
   data = data
     .split("\n")
@@ -16,8 +16,8 @@ module.exports = async ({ github, context }) => {
   }
 
   const body = data.trim()
-    ? '⚠ Flake8 diff showing the effect of this PR on typeshed: \n```diff\n' + data + '```'
-    : 'This change has no effect on typeshed. 🤖🎉'
+    ? '⚠ Diff showing the effect of this PR on typeshed's stdlib: \n\n<details>\n\n```diff\n' + data + '\n```\n\n</details>'
+    : 'This change has no effect on typeshed's stdlib. 🤖🎉'
   const issue_number = parseInt(fs.readFileSync("pr_number.txt", { encoding: "utf8" }))
   await github.rest.issues.createComment({
     issue_number,

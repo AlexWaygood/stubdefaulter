@@ -15,5 +15,5 @@ module.exports = async ({ github, context }) => {
     archive_format: "zip",
   })
 
-  fs.writeFileSync("errors.zip", Buffer.from(download.data));
+  fs.writeFileSync("diff.zip", Buffer.from(download.data));
 }
