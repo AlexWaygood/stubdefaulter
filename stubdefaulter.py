@@ -33,7 +33,10 @@ def log(*objects: object) -> None:
 
 def infer_value_of_node(node: libcst.BaseExpression) -> object:
     """Return NotImplemented if we can't infer the value."""
-    if isinstance(node, (libcst.Integer, libcst.Float, libcst.SimpleString)):
+    simple_number_or_string = (
+        libcst.Integer, libcst.Float, libcst.SimpleString, libcst.Imaginary
+    )
+    if isinstance(node, simple_number_or_string):
         return node.evaluated_value
     elif isinstance(node, libcst.Name):
         if node.value == "True":
@@ -47,9 +50,27 @@ def infer_value_of_node(node: libcst.BaseExpression) -> object:
     elif isinstance(node, libcst.UnaryOperation):
         if isinstance(node.operator, libcst.Minus):
             operand = infer_value_of_node(node.expression)
-            if not isinstance(operand, (int, float)):
+            if isinstance(operand, (int, float)):
+                return -operand
+            elif isinstance(operand, complex):
+                return complex(imag=-operand.imag)
+            else:
                 return NotImplemented
-            return -operand
+        else:
+            return NotImplemented
+    elif isinstance(node, libcst.BinaryOperation) and isinstance(
+        node.operator, (libcst.Subtract, libcst.Add)
+    ):
+        left = infer_value_of_node(node.left)
+        if isinstance(left, (int, float)):
+            right = infer_value_of_node(node.right)
+            if isinstance(right, complex):
+                if isinstance(node.operator, libcst.Add):
+                    return left + right
+                else:
+                    return left - right
+            else:
+                return NotImplemented
         else:
             return NotImplemented
     else:
@@ -71,39 +92,66 @@ class ReplaceEllipses(libcst.CSTTransformer):
             return None
         if param.default is inspect.Parameter.empty:
             return None
-        if type(param.default) is bool or param.default is None:
-            return libcst.Name(value=str(param.default))
-        elif type(param.default) is str:
-            return libcst.SimpleString(value=repr(param.default))
-        elif type(param.default) is int:
+        return self._get_libcst_for_default(param.default, node.annotation)
+
+    def _get_libcst_for_default(
+        self, default: object, annotation: libcst.Annotation | None
+    ) -> libcst.BaseExpression | None:
+        if type(default) is bool or default is None:
+            return libcst.Name(value=str(default))
+        elif type(default) is str:
+            return libcst.SimpleString(value=repr(default))
+        elif type(default) is int:
+            assert isinstance(default, int)  # for pyanalyze
             if (
-                node.annotation
-                and isinstance(node.annotation.annotation, libcst.Name)
-                and node.annotation.annotation.value == "bool"
+                annotation
+                and isinstance(annotation.annotation, libcst.Name)
+                and annotation.annotation.value == "bool"
             ):
                 # Skip cases where the type is annotated as bool but the default is an int.
                 return None
-            if param.default >= 0:
-                return libcst.Integer(value=str(param.default))
+            if default >= 0:
+                return libcst.Integer(value=str(default))
             else:
                 return libcst.UnaryOperation(
                     operator=libcst.Minus(),
-                    expression=libcst.Integer(value=str(-param.default)),
+                    expression=libcst.Integer(value=str(-default)),
                 )
-        elif type(param.default) is float:
-            if not math.isfinite(param.default):
+        elif type(default) is float:
+            assert isinstance(default, float)  # for pyanalyze
+            if not math.isfinite(default):
                 # Edge cases that it's probably not worth handling
                 return None
             # `-0.0 == +0.0`, but we want to keep the sign,
             # so use math.copysign() rather than a comparison with 0
             # to determine whether or not it's a negative float
-            if math.copysign(1, param.default) < 0:
+            if math.copysign(1, default) < 0:
                 return libcst.UnaryOperation(
                     operator=libcst.Minus(),
-                    expression=libcst.Float(value=str(-param.default)),
+                    expression=libcst.Float(value=str(-default)),
                 )
             else:
-                return libcst.Float(value=str(param.default))
+                return libcst.Float(value=str(default))
+        elif type(default) is complex:
+            assert isinstance(default, complex)  # for pyanalyze
+            real = int(default.real) if default.real.is_integer() else default.real
+            imag = int(default.imag) if default.imag.is_integer() else default.imag
+            if real == 0:
+                if imag >= 0:
+                    return libcst.Imaginary(value=f"{imag}j")
+                else:
+                    return libcst.UnaryOperation(
+                        operator=libcst.Minus(),
+                        expression=libcst.Imaginary(value=f"{-imag}j"),
+                    )
+            else:
+                left = self._get_libcst_for_default(real, None)
+                assert left is not None
+                return libcst.BinaryOperation(
+                    left=left,
+                    operator=(libcst.Add() if imag > 0 else libcst.Subtract()),
+                    right=libcst.Imaginary(value=f"{abs(imag)}j"),
+                )
         return None
 
     def leave_Param(
